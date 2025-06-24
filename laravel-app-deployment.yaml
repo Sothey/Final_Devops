@@ -13,8 +13,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: laravel-app-deployment
-  labels:
-    app: laravel-app
 spec:
   replicas: 1
   selector:
@@ -90,12 +88,6 @@ spec:
                     echo "--- Starting postStart setup ---"
                     pwd
                     ls -la /app
-                    if [ ! -f "/app/vendor/autoload.php" ]; then
-                      echo "Vendor autoload missing, attempting composer install..."
-                      composer install --no-dev --optimize-autoloader || { echo "Composer install failed, proceeding without it."; }
-                    else
-                      echo "Vendor autoload exists, skipping composer install."
-                    fi
                     echo "Adjusting permissions..."
                     chown -R bitnami:bitnami /app/storage /app/bootstrap/cache
                     chmod -R 775 /app/storage /app/bootstrap/cache
@@ -103,10 +95,6 @@ spec:
                     cd /app || { echo "Failed to cd /app"; exit 1; }
                     echo "Running migrations (if possible)..."
                     php artisan migrate --force || { echo "Migrations failed, skipping."; }
-                    echo "Caching configurations (if possible)..."
-                    php artisan config:cache || { echo "Config cache failed, skipping."; }
-                    php artisan route:cache || { echo "Route cache failed, skipping."; }
-                    php artisan view:cache || { echo "View cache failed, skipping."; }
                     echo "--- postStart setup finished ---"
           command:
             - /bin/bash

@@ -1,0 +1,99 @@
+- name: Deploy and manage Laravel application in Kubernetes pod
+  hosts: localhost
+  gather_facts: no
+  vars:
+    pod_name: "laravel-app-deployment-<new-pod-id>"  # Replace with actual pod name from kubectl get pods
+    container_name: "laravel-web-server"
+    mysql_pod_name: "laravel-app-deployment-<new-pod-id>"  # Replace with actual pod name
+    mysql_container_name: "mysql-db-server"
+    mysql_user: "root"
+    mysql_password: "Hello@123"
+    mysql_db: "sothey_db"
+    backup_path: "/tmp/backup.sql"
+  tasks:
+    - name: Check for local Git changes
+      kubernetes.core.k8s_exec:
+        namespace: default
+        pod: "{{ pod_name }}"
+        container: "{{ container_name }}"
+        command: "git -C /app status --porcelain"
+      register: git_status
+      failed_when: git_status.rc != 0
+
+    - name: Perform Git pull if no local changes
+      kubernetes.core.k8s_exec:
+        namespace: default
+        pod: "{{ pod_name }}"
+        container: "{{ container_name }}"
+        command: "git -C /app pull"
+      when: git_status.stdout == ""
+      register: git_pull_result
+      failed_when: git_pull_result.rc != 0
+
+    - name: Install Composer dependencies
+      kubernetes.core.k8s_exec:
+        namespace: default
+        pod: "{{ pod_name }}"
+        container: "{{ container_name }}"
+        command: "composer install --no-dev --optimize-autoloader"
+      register: composer_result
+      failed_when: composer_result.rc != 0
+
+    - name: Install npm dependencies and build
+      kubernetes.core.k8s_exec:
+        namespace: default
+        pod: "{{ pod_name }}"
+        container: "{{ container_name }}"
+        command: "npm install && npm run build"
+      register: npm_result
+      failed_when: npm_result.rc != 0
+
+    - name: Set up SQLite test database
+      kubernetes.core.k8s_exec:
+        namespace: default
+        pod: "{{ pod_name }}"
+        container: "{{ container_name }}"
+        command: |
+          touch /app/database/database.sqlite
+          chown bitnami:bitnami /app/database/database.sqlite
+          chmod 664 /app/database/database.sqlite
+          cp /app/.env /app/.env.test
+          sed -i 's/DB_CONNECTION=mysql/DB_CONNECTION=sqlite/' /app/.env.test
+          sed -i 's/DB_DATABASE=sothey_db/DB_DATABASE=\/app\/database\/database.sqlite/' /app/.env.test
+          php artisan config:clear
+          php artisan migrate --env=testing --force
+      register: sqlite_setup
+      failed_when: sqlite_setup.rc != 0
+
+    - name: Run tests against SQLite database
+      kubernetes.core.k8s_exec:
+        namespace: default
+        pod: "{{ pod_name }}"
+        container: "{{ container_name }}"
+        command: "php artisan test --env=testing"
+      register: test_result
+      failed_when: test_result.rc != 0
+
+    - name: Backup MySQL database
+      kubernetes.core.k8s_exec:
+        namespace: default
+        pod: "{{ mysql_pod_name }}"
+        container: "{{ mysql_container_name }}"
+        command: "mysqldump -u {{ mysql_user }} -p{{ mysql_password }} {{ mysql_db }} > {{ backup_path }}"
+      register: backup_result
+      failed_when: backup_result.rc != 0
+
+    - name: Copy MySQL backup to local machine
+      kubernetes.core.k8s_exec:
+        namespace: default
+        pod: "{{ mysql_pod_name }}"
+        container: "{{ mysql_container_name }}"
+        command: "cat {{ backup_path }}"
+      register: backup_content
+      failed_when: backup_content.rc != 0
+
+    - name: Save backup locally
+      copy:
+        content: "{{ backup_content.stdout }}"
+        dest: "{{ playbook_dir }}/backup.sql"
+      delegate_to: localhost
